@@ -4,6 +4,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <array>
 
 namespace fsl
 {
@@ -106,7 +107,8 @@ private:
 };
 
 /** One titled section of the panel — a coloured heading dot, a title, and
- * whatever rows of controls the caller lays out inside contentArea(). */
+ * whatever rows of controls the caller lays out inside contentArea(). The
+ * title sits directly above its row, not as a separate detached band. */
 class Module : public juce::Component
 {
 public:
@@ -119,25 +121,42 @@ private:
     juce::Colour accent_;
 };
 
+/** A five-lane scrolling oscilloscope: main, reference, comparator, slew and
+ * output, drained at ~30 fps from the processor's lock-free scope FIFO. */
+class Scope : public juce::Component
+{
+public:
+    void paint (juce::Graphics&) override;
+    void pull (FasalasProcessor&);
+
+private:
+    static constexpr int historyLength = 1024;
+    std::array<float, historyLength> mainBuf_ {}, refBuf_ {}, pcBuf_ {}, slewBuf_ {}, outBuf_ {};
+    int writeIndex_ = 0;
+};
+
 /** The whole plugin panel: six modules in a 3x2 grid, a top bar with the
- * wordmark and the lock LED, all six sections talking directly to the APVTS. */
+ * wordmark and the lock LED, and the scope along the bottom — all six
+ * sections talking directly to the processor's APVTS. */
 class Panel : public juce::Component
 {
 public:
-    explicit Panel (juce::AudioProcessorValueTreeState&);
+    explicit Panel (FasalasProcessor&);
     ~Panel() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    /** Called from the editor's UI timer with a fresh snapshot from the audio thread. */
-    void updateTelemetry (const Telemetry&);
+    /** Called from the editor's UI timer: refreshes telemetry (lock, lamp,
+     * readouts) and pulls the latest scope samples. */
+    void refresh();
 
 private:
     static void layoutRow (juce::Rectangle<int> area, std::initializer_list<juce::Component*> items, int gap);
 
-    juce::AudioProcessorValueTreeState& state_;
+    FasalasProcessor& proc_;
     FasalasLookAndFeel lnf_;
+    Scope scope_;
 
     // Top bar
     Lamp lockLed_ { hue::p4blue };

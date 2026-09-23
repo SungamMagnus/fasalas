@@ -98,7 +98,7 @@ int main (int argc, char** argv)
 
     auto* fasalasEditor = new FasalasEditor (proc);
     std::unique_ptr<juce::AudioProcessorEditor> editor (fasalasEditor);
-    editor->setSize (1040, 560);
+    editor->setSize (940, 640);
     fasalasEditor->refreshTelemetryNow();
 
     const float scale = 2.0f;

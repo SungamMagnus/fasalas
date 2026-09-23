@@ -91,6 +91,27 @@ EngineParams FasalasProcessor::collectParams() const
     return p;
 }
 
+void FasalasProcessor::pushScope (const EngineTap& tap)
+{
+    int start1, size1, start2, size2;
+    scopeFifo_.prepareToWrite (1, start1, size1, start2, size2);
+    if (size1 > 0)
+        scopeBuffer_[(size_t) start1] = { tap.main, tap.side, tap.pc, tap.slew, tap.out };
+    else if (size2 > 0)
+        scopeBuffer_[(size_t) start2] = { tap.main, tap.side, tap.pc, tap.slew, tap.out };
+    scopeFifo_.finishedWrite (size1 + size2);
+}
+
+int FasalasProcessor::drainScope (ScopeSample* dest, int maxSamples)
+{
+    int start1, size1, start2, size2;
+    scopeFifo_.prepareToRead (maxSamples, start1, size1, start2, size2);
+    for (int i = 0; i < size1; ++i) dest[i] = scopeBuffer_[(size_t) (start1 + i)];
+    for (int i = 0; i < size2; ++i) dest[size1 + i] = scopeBuffer_[(size_t) (start2 + i)];
+    scopeFifo_.finishedRead (size1 + size2);
+    return size1 + size2;
+}
+
 void FasalasProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
@@ -129,11 +150,18 @@ void FasalasProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     const float* sL = sideUp.getChannelPointer (0);
     const float* sR = sideUp.getChannelPointer (1);
 
+    // Feed the scope at base rate, not the oversampled rate — plenty for a
+    // UI display and a lot less traffic through the lock-free FIFO.
+    const int scopeStride = numSamples > 0 ? juce::jmax (1, osSamples / numSamples) : 1;
+
     if (stereo)
     {
         EngineTap tap;
         for (int i = 0; i < osSamples; ++i)
+        {
             mL[i] = engineL_.process (mL[i], sL[i], mL[i], tap);
+            if (i % scopeStride == 0) pushScope (tap);
+        }
         for (int i = 0; i < osSamples; ++i)
             mR[i] = engineR_.process (mR[i], sR[i], mR[i], tap);
     }
@@ -147,6 +175,7 @@ void FasalasProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
             const float out = engineL_.process (a, b, a, tap);
             mL[i] = out;
             mR[i] = out;
+            if (i % scopeStride == 0) pushScope (tap);
         }
     }
 

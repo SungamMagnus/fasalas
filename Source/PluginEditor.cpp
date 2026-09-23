@@ -4,13 +4,13 @@ namespace fsl
 {
 
 FasalasEditor::FasalasEditor (FasalasProcessor& p)
-    : AudioProcessorEditor (&p), processor_ (p), panel_ (p.apvts)
+    : AudioProcessorEditor (&p), processor_ (p), panel_ (p)
 {
     addAndMakeVisible (panel_);
     setResizable (true, true);
-    setResizeLimits (860, 460, 1600, 860);
-    setSize (1040, 560);
-    startTimerHz (20);
+    setResizeLimits (920, 480, 1500, 900);
+    setSize (940, 640);
+    startTimerHz (30);
 }
 
 FasalasEditor::~FasalasEditor() { stopTimer(); }
@@ -21,7 +21,7 @@ void FasalasEditor::resized() { panel_.setBounds (getLocalBounds()); }
 
 void FasalasEditor::timerCallback()
 {
-    panel_.updateTelemetry (processor_.telemetry);
+    panel_.refresh();
 }
 
 } // namespace fsl

@@ -17,9 +17,9 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    /** Pulls one telemetry snapshot into the panel immediately, without
-     * waiting for the UI timer — used by the offscreen panel_shot tool so a
-     * rendered screenshot shows a genuine lock/frequency state. */
+    /** Pulls telemetry and the latest scope samples into the panel
+     * immediately, without waiting for the UI timer — used by the offscreen
+     * panel_shot tool so a rendered screenshot shows genuine state. */
     void refreshTelemetryNow() { timerCallback(); }
 
 private:

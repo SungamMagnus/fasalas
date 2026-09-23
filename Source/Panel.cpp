@@ -133,7 +133,7 @@ Knob::Knob (juce::AudioProcessorValueTreeState& state, const juce::String& param
     attachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, paramID, slider_);
     refreshValue();
 
-    setSize (58, 76);
+    setSize (54, 76);
 }
 
 void Knob::resized()
@@ -197,6 +197,8 @@ Latch::Latch (juce::AudioProcessorValueTreeState& state, const juce::String& par
               const juce::String& text, juce::Colour accent)
 {
     button_.setButtonText (text);
+    button_.setClickingTogglesState (true); // ButtonAttachment reads getToggleState() on click — without
+                                             // this the button never actually toggles.
     setAccent (button_, accent);
     addAndMakeVisible (button_);
     attachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, paramID, button_);
@@ -236,47 +238,130 @@ Module::Module (juce::String title, juce::Colour accent) : title_ (title), accen
 void Module::paint (juce::Graphics& g)
 {
     g.fillAll (hue::panel);
-    auto head = getLocalBounds().removeFromTop (22);
+    auto head = getLocalBounds().withTrimmedLeft (8).removeFromTop (16);
 
     g.setColour (accent_);
-    g.fillEllipse (juce::Rectangle<float> (6.0f, 6.0f).withCentre ({ (float) head.getX() + 14.0f, (float) head.getCentreY() }));
+    g.fillEllipse (juce::Rectangle<float> (5.0f, 5.0f).withCentre ({ (float) head.getX() + 4.0f, (float) head.getCentreY() }));
 
     g.setColour (hue::muted);
-    g.setFont (juce::Font (10.5f).withExtraKerningFactor (0.07f));
-    g.drawFittedText (title_.toUpperCase(), head.withTrimmedLeft (24).withTrimmedRight (8),
-                       juce::Justification::centredLeft, 1);
+    g.setFont (juce::Font (9.5f).withExtraKerningFactor (0.07f));
+    g.drawFittedText (title_.toUpperCase(), head.withTrimmedLeft (14), juce::Justification::centredLeft, 1);
 }
 
-juce::Rectangle<int> Module::contentArea() const { return getLocalBounds().withTrimmedTop (26).reduced (6); }
+// Content starts right under the title — the row below reads as that title's
+// own row, not a separate floating block.
+juce::Rectangle<int> Module::contentArea() const { return getLocalBounds().withTrimmedTop (18).reduced (6, 2); }
+
+// ─────────────────────────────── Scope ─────────────────────────────────
+
+void Scope::pull (FasalasProcessor& proc)
+{
+    ScopeSample buf[256];
+    int n;
+    bool any = false;
+    while ((n = proc.drainScope (buf, 256)) > 0)
+    {
+        any = true;
+        for (int i = 0; i < n; ++i)
+        {
+            mainBuf_[(size_t) writeIndex_] = buf[i].main;
+            refBuf_[(size_t) writeIndex_]  = buf[i].ref;
+            pcBuf_[(size_t) writeIndex_]   = buf[i].pc;
+            slewBuf_[(size_t) writeIndex_] = buf[i].slew;
+            outBuf_[(size_t) writeIndex_]  = buf[i].out;
+            writeIndex_ = (writeIndex_ + 1) % historyLength;
+        }
+    }
+    if (any) repaint();
+}
+
+void Scope::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds();
+    g.fillAll (hue::well);
+    if (r.getWidth() <= 0 || r.getHeight() <= 0) return;
+
+    struct Lane { const std::array<float, historyLength>* data; const char* name; juce::Colour colour; bool autoscale; };
+    const Lane lanes[] = {
+        { &mainBuf_, "MAIN", hue::p4blue,  true },
+        { &refBuf_,  "REF",  hue::p2pink,  true },
+        { &pcBuf_,   "CMP",  hue::p3rose,  false },
+        { &slewBuf_, "SLEW", hue::p1lilac, false },
+        { &outBuf_,  "OUT",  hue::fg,      true },
+    };
+    constexpr int numLanes = (int) (sizeof (lanes) / sizeof (lanes[0]));
+    const float laneH = (float) r.getHeight() / (float) numLanes;
+    const float xs = (float) r.getWidth() / (float) (historyLength - 1);
+
+    g.setFont (juce::Font (9.0f).withExtraKerningFactor (0.06f));
+
+    for (int li = 0; li < numLanes; ++li)
+    {
+        const auto& lane = lanes[li];
+        const float y0 = (float) r.getY() + (float) li * laneH;
+        const float mid = y0 + laneH * 0.5f;
+
+        if (li > 0)
+        {
+            g.setColour (hue::sep);
+            g.fillRect (juce::Rectangle<float> ((float) r.getX(), y0, (float) r.getWidth(), 1.0f));
+        }
+        g.setColour (hue::line2);
+        g.fillRect (juce::Rectangle<float> ((float) r.getX(), mid, (float) r.getWidth(), 1.0f));
+
+        float peak = 1.0f;
+        if (lane.autoscale)
+        {
+            peak = 0.0f;
+            for (float v : *lane.data) peak = juce::jmax (peak, std::abs (v));
+            peak = juce::jmax (peak, 0.02f);
+        }
+        const float amp = laneH * 0.4f / peak;
+
+        juce::Path p;
+        for (int i = 0; i < historyLength; ++i)
+        {
+            const int idx = (writeIndex_ + i) % historyLength; // oldest..newest, left to right
+            const float x = (float) r.getX() + (float) i * xs;
+            const float y = mid - (*lane.data)[(size_t) idx] * amp;
+            if (i == 0) p.startNewSubPath (x, y); else p.lineTo (x, y);
+        }
+        g.setColour (lane.colour);
+        g.strokePath (p, juce::PathStrokeType (1.2f));
+
+        g.setColour (hue::muted);
+        g.drawText (lane.name, r.getX() + 6, (int) y0 + 3, 50, 12, juce::Justification::centredLeft);
+    }
+}
 
 // ─────────────────────────────── Panel ─────────────────────────────────
 
-Panel::Panel (juce::AudioProcessorValueTreeState& state)
-    : state_ (state),
-      gainA_ (state, pid::gainA, "Main", hue::p4blue),
-      gainB_ (state, pid::gainB, "Sidechain", hue::p2pink),
-      hyst_ (state, pid::hysteresis, "Hysteresis", hue::p4blue),
-      divA_ (state, pid::divA, juce::String::fromUTF8 ("\xc3\xb7 Main"), hue::p4blue),
-      divB_ (state, pid::divB, juce::String::fromUTF8 ("\xc3\xb7 Side"), hue::p2pink),
-      stereo_ (state, pid::stereo, { "Mono", "Stereo" }, hue::p4blue),
-      mode_ (state, pid::mode, { "XOR", "RS", "PFD", "CMP", "WIN" }, hue::p3rose),
-      window_ (state, pid::window, "Window", hue::p3rose),
-      rise_ (state, pid::rise, "Rise", hue::p1lilac),
-      fall_ (state, pid::fall, "Fall", hue::p1lilac),
-      shape_ (state, pid::shape, { "LIN", "EXP" }, hue::p1lilac),
-      link_ (state, pid::link, "Link", hue::p1lilac),
-      loop_ (state, pid::loop, "Loop", hue::p1lilac),
-      vcoOffset_ (state, pid::vcoOffset, "Offset", hue::p1lilac),
-      vcoRange_ (state, pid::vcoRange, { "LO", "MID", "HI" }, hue::p1lilac),
-      loopTrack_ (state, pid::loopTrack, { "MAIN", "SIDE" }, hue::p1lilac),
-      filterType_ (state, pid::filterType, { "LP", "BP", "HP", "NT" }, hue::p5sky),
-      filterSlope_ (state, pid::filterSlope, { "12", "24" }, hue::p5sky),
-      cutoff_ (state, pid::cutoff, "Cutoff", hue::p5sky),
-      resonance_ (state, pid::resonance, "Resonance", hue::p5sky),
-      drive_ (state, pid::drive, "Drive", hue::p5sky),
-      mix_ (state, pid::mix, "Mix", hue::fg),
-      level_ (state, pid::level, "Level", hue::fg),
-      lim_ (state, pid::limiter, "Lim", hue::amber)
+Panel::Panel (FasalasProcessor& proc)
+    : proc_ (proc),
+      gainA_ (proc.apvts, pid::gainA, "Main", hue::p4blue),
+      gainB_ (proc.apvts, pid::gainB, "Sidechain", hue::p2pink),
+      hyst_ (proc.apvts, pid::hysteresis, "Hysteresis", hue::p4blue),
+      divA_ (proc.apvts, pid::divA, juce::String::fromUTF8 ("\xc3\xb7 Main"), hue::p4blue),
+      divB_ (proc.apvts, pid::divB, juce::String::fromUTF8 ("\xc3\xb7 Side"), hue::p2pink),
+      stereo_ (proc.apvts, pid::stereo, { "Mono", "Stereo" }, hue::p4blue),
+      mode_ (proc.apvts, pid::mode, { "XOR", "RS", "PFD", "CMP", "WIN" }, hue::p3rose),
+      window_ (proc.apvts, pid::window, "Window", hue::p3rose),
+      rise_ (proc.apvts, pid::rise, "Rise", hue::p1lilac),
+      fall_ (proc.apvts, pid::fall, "Fall", hue::p1lilac),
+      shape_ (proc.apvts, pid::shape, { "LIN", "EXP" }, hue::p1lilac),
+      link_ (proc.apvts, pid::link, "Link", hue::p1lilac),
+      loop_ (proc.apvts, pid::loop, "Loop", hue::p1lilac),
+      vcoOffset_ (proc.apvts, pid::vcoOffset, "Offset", hue::p1lilac),
+      vcoRange_ (proc.apvts, pid::vcoRange, { "LO", "MID", "HI" }, hue::p1lilac),
+      loopTrack_ (proc.apvts, pid::loopTrack, { "MAIN", "SIDE" }, hue::p1lilac),
+      filterType_ (proc.apvts, pid::filterType, { "LP", "BP", "HP", "NT" }, hue::p5sky),
+      filterSlope_ (proc.apvts, pid::filterSlope, { "12", "24" }, hue::p5sky),
+      cutoff_ (proc.apvts, pid::cutoff, "Cutoff", hue::p5sky),
+      resonance_ (proc.apvts, pid::resonance, "Resonance", hue::p5sky),
+      drive_ (proc.apvts, pid::drive, "Drive", hue::p5sky),
+      mix_ (proc.apvts, pid::mix, "Mix", hue::fg),
+      level_ (proc.apvts, pid::level, "Level", hue::fg),
+      lim_ (proc.apvts, pid::limiter, "Lim", hue::amber)
 {
     juce::LookAndFeel::setDefaultLookAndFeel (&lnf_);
     lim_.setAmber (true);
@@ -331,7 +416,9 @@ Panel::Panel (juce::AudioProcessorValueTreeState& state)
     vcoReadout_.setText ("Off", juce::dontSendNotification);
     loopMod_.addAndMakeVisible (vcoReadout_);
 
-    setSize (1040, 560);
+    addAndMakeVisible (scope_);
+
+    setSize (940, 640);
 }
 
 Panel::~Panel() { juce::LookAndFeel::setDefaultLookAndFeel (nullptr); }
@@ -359,31 +446,36 @@ void Panel::resized()
 {
     auto r = getLocalBounds();
 
-    auto top = r.removeFromTop (40).reduced (14, 8);
-    wordmark_.setBounds (top.removeFromLeft (200));
+    auto top = r.removeFromTop (36).reduced (14, 6);
+    wordmark_.setBounds (top.removeFromLeft (180));
     lockLed_.setBounds (top.removeFromRight (16).withSizeKeepingCentre (11, 11));
     lockCaption_.setBounds (top.removeFromRight (56));
 
-    r.reduce (1, 1);
-    const int colW = r.getWidth() / 3;
-    const int rowH = r.getHeight() / 2;
+    r.reduce (1, 0);
+
+    // The module grid is a fixed height sized to what its controls actually
+    // need — it does not stretch to fill the window. Any extra height the
+    // window is resized to goes to the scope below instead of empty space.
+    const int rowH = 150;
+    auto gridArea = r.removeFromTop (rowH * 2);
+    const int colW = gridArea.getWidth() / 3;
+
     juce::Rectangle<int> cells[6];
     for (int i = 0; i < 6; ++i)
-        cells[i] = { r.getX() + (i % 3) * colW, r.getY() + (i / 3) * rowH, colW, rowH };
-    cells[2].setWidth (r.getRight() - cells[2].getX());
-    cells[5].setWidth (r.getRight() - cells[5].getX());
+        cells[i] = { gridArea.getX() + (i % 3) * colW, gridArea.getY() + (i / 3) * rowH, colW, rowH };
+    cells[2].setWidth (gridArea.getRight() - cells[2].getX());
+    cells[5].setWidth (gridArea.getRight() - cells[5].getX());
 
-    inMod_.setBounds (cells[0]);
-    cmpMod_.setBounds (cells[1]);
-    slewMod_.setBounds (cells[2]);
-    loopMod_.setBounds (cells[3]);
-    filtMod_.setBounds (cells[4]);
-    outMod_.setBounds (cells[5]);
+    Module* mods[6] = { &inMod_, &cmpMod_, &slewMod_, &loopMod_, &filtMod_, &outMod_ };
+    for (int i = 0; i < 6; ++i)
+        mods[i]->setBounds (cells[i].withTrimmedRight (1).withTrimmedBottom (1));
+
+    scope_.setBounds (r.reduced (2, 4));
 
     {
         auto a = inMod_.contentArea();
         auto row2 = a.removeFromBottom (26);
-        layoutRow (a, { &gainA_, &gainB_, &hyst_, &divA_, &divB_ }, 6);
+        layoutRow (a, { &gainA_, &gainB_, &hyst_, &divA_, &divB_ }, 4);
         layoutRow (row2, { &stereo_ }, 0);
     }
     {
@@ -404,7 +496,7 @@ void Panel::resized()
         auto row3 = a.removeFromBottom (26);
         layoutRow (row1, { &loop_, &vcoReadout_ }, 10);
         layoutRow (a, { &vcoOffset_ }, 0);
-        layoutRow (row3, { &vcoRange_, &loopTrack_ }, 8);
+        layoutRow (row3, { &vcoRange_, &loopTrack_ }, 16);
     }
     {
         auto a = filtMod_.contentArea();
@@ -420,8 +512,11 @@ void Panel::resized()
     }
 }
 
-void Panel::updateTelemetry (const Telemetry& t)
+void Panel::refresh()
 {
+    scope_.pull (proc_);
+
+    const auto& t = proc_.telemetry;
     const bool locked = t.locked.load();
     const bool harmonic = t.harmonicLock.load();
     lockLed_.setOn (locked);
