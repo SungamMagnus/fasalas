@@ -60,6 +60,28 @@ WIN need something in the sidechain to do anything.
 | **÷ Main**, **÷ Side** | Edge dividers, ÷1–÷16, after the manual's frequency-division patch with the A-163. Gives pseudo-harmonics; also the multiplier when Loop is on. |
 | **Mono / Stereo** | Stereo runs two full engines, one per channel, main L against sidechain L and R against R. Mono sums each input to one signal first and runs a single engine into both output channels. |
 
+### Env follower
+
+A peak-detector envelope follower — rise to the peak, hold it, then fall —
+running on the raw, un-gained Main or Sidechain input (stereo-linked: one
+envelope, the louder of L/R). Tick the small violet box at a knob's top-right
+corner (Window, Offset, Cutoff, Drive) to have the envelope push that control
+up from wherever its own knob is set; the violet outer arc and the violet
+value text show where it actually sits right now. Modulation is **upward
+only** and clamps at the top of the target's range, and all four targets
+share one Sensitivity — there's no per-target depth or polarity. The mini
+scope below the knobs shows about two seconds of history: the detected input
+level in grey, the envelope in violet, so Rise, Hold and Fall are visible
+doing their jobs.
+
+| Control | What it does |
+|---|---|
+| **Main / Side** | Which raw input the follower listens to. |
+| **Sensitivity** | Shared modulation depth for all four targets: at 100%, a full-scale envelope can sweep a ticked control across its whole remaining range above the knob. |
+| **Rise** | 0.1 ms – 1 s. How fast the envelope catches up to a rising peak. |
+| **Hold** | 0 – 1 s. How long the peak is held before Fall is allowed to start. |
+| **Fall** | 1 ms – 5 s. How fast the envelope relaxes once Hold has elapsed. |
+
 ### Comparator
 
 Three of these are the A-196's own switch positions; CMP and WIN only make
@@ -94,6 +116,7 @@ place of your track — the module's actual closed loop.
 | **Range**, **Offset** | The A-196's own table: Range picks the oscillator's bottom frequency (LO 2 Hz, MID 20 Hz, HI 200 Hz), Offset (0–10) picks the top within it (up to 1 kHz / 10 kHz / 20 kHz). |
 | **Locks to** | What the oscillator is compared against: **Main** (your track) or **Side** (the sidechain). |
 | **÷ Main** | Still active in Loop — divides the oscillator, so it locks at 2×, 3× and up: the manual's frequency-multiplication patch. |
+| **Soften** | Morphs the oscillator from square (0%) to triangle (100%) by clipping a triangle less and less hard — the corners round off progressively instead of cross-fading between two waveforms, so the zero crossings (and loop locking, which only cares about those) don't move. |
 
 ### Filter
 
@@ -121,6 +144,10 @@ SIDECHAIN ──> condition (gain·schmitt·÷N)─┘
 
 Loop on: SLEW also drives a VCO that takes the comparator's place at MAIN IN
          (reference set by Locks to), and becomes FILTER's input directly.
+
+MAIN IN or SIDECHAIN (raw, un-gained) ──> ENV FOLLOWER ──> Window, Offset,
+    Cutoff, Drive (whichever are ticked), pushed up from wherever their own
+    knob sits, scaled by the one shared Sensitivity, clamped at the top.
 ```
 
 The comparator, slew and filter chain runs 4× oversampled
@@ -129,10 +156,13 @@ hard edges from aliasing; the plug-in reports the resulting latency to the
 host. A 5 Hz one-pole DC blocker sits after the filter, since PFD's holds and
 asymmetric slew times leave DC behind.
 
-## Known limitations (v0.1.0)
+The envelope follower runs at base rate (ahead of the oversampling, on the
+unprocessed input) and modulates its four targets at a cheap control rate
+inside the oversampled loop, not per-sample. Its own mini scope is decimated
+to ~1 kHz before it ever reaches the UI.
 
-- No live oscilloscope. The browser prototype this was designed from had one;
-  it's cut from this first native build to ship, and is a planned addition.
+## Known limitations
+
 - The mode/shape/range/type pill controls don't reflect host automation —
   drag them from the plug-in's own UI and they work correctly, including
   saving with your session, but if a DAW automates one from outside the UI

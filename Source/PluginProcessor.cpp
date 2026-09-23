@@ -13,6 +13,10 @@ FasalasProcessor::FasalasProcessor()
                            .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
 {
+    cutoffParam_ = apvts.getParameter (pid::cutoff);
+    driveParam_ = apvts.getParameter (pid::drive);
+    windowParam_ = apvts.getParameter (pid::window);
+    vcoOffsetParam_ = apvts.getParameter (pid::vcoOffset);
 }
 
 bool FasalasProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -44,6 +48,12 @@ void FasalasProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     engineR_.prepare (osRate);
     limiter_.prepare (sampleRate);
 
+    envFollower_.prepare (sampleRate);
+    envBuffer_.assign ((size_t) juce::jmax (1, samplesPerBlock), 0.0f);
+    envScopeInterval_ = juce::jmax (1, (int) std::round (sampleRate / 1000.0));
+    envScopeCounter_ = 0;
+    envScopePeak_ = 0.0f;
+
     setLatencySamples ((int) osMain_->getLatencyInSamples());
 }
 
@@ -52,6 +62,7 @@ void FasalasProcessor::releaseResources()
     engineL_.reset();
     engineR_.reset();
     limiter_.reset();
+    envFollower_.reset();
     if (osMain_) osMain_->reset();
     if (osSide_) osSide_->reset();
 }
@@ -78,6 +89,7 @@ EngineParams FasalasProcessor::collectParams() const
     p.loopLockToMain = std::round (raw (pid::loopTrack)) < 0.5f;
     p.vcoRange = (VcoRange) (int) std::round (raw (pid::vcoRange));
     p.vcoOffset = raw (pid::vcoOffset);
+    p.soften = raw (pid::vcoSoften);
 
     p.filterType = (FilterType) (int) std::round (raw (pid::filterType));
     p.filterSlope = (FilterSlope) (int) std::round (raw (pid::filterSlope));
@@ -112,6 +124,27 @@ int FasalasProcessor::drainScope (ScopeSample* dest, int maxSamples)
     return size1 + size2;
 }
 
+void FasalasProcessor::pushEnvScope (const EnvScopeSample& s)
+{
+    int start1, size1, start2, size2;
+    envScopeFifo_.prepareToWrite (1, start1, size1, start2, size2);
+    if (size1 > 0)
+        envScopeBuffer_[(size_t) start1] = s;
+    else if (size2 > 0)
+        envScopeBuffer_[(size_t) start2] = s;
+    envScopeFifo_.finishedWrite (size1 + size2);
+}
+
+int FasalasProcessor::drainEnvScope (EnvScopeSample* dest, int maxSamples)
+{
+    int start1, size1, start2, size2;
+    envScopeFifo_.prepareToRead (maxSamples, start1, size1, start2, size2);
+    for (int i = 0; i < size1; ++i) dest[i] = envScopeBuffer_[(size_t) (start1 + i)];
+    for (int i = 0; i < size2; ++i) dest[size1 + i] = envScopeBuffer_[(size_t) (start2 + i)];
+    envScopeFifo_.finishedRead (size1 + size2);
+    return size1 + size2;
+}
+
 void FasalasProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
@@ -132,11 +165,51 @@ void FasalasProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     }
     auto& sideSource = hasSidechain ? sideBus : sideScratch;
 
+    // ── Envelope follower ── base rate, on the raw/un-gained selected input,
+    // before either bus is touched by anything below. Stereo-linked: one
+    // envelope (max of L/R) regardless of Mono/Stereo or how many engines
+    // read it.
+    if ((int) envBuffer_.size() < numSamples)
+        envBuffer_.resize ((size_t) numSamples);
+    const bool envUseSide = apvts.getRawParameterValue (pid::envSource)->load() > 0.5f;
+    envFollower_.setTimes (apvts.getRawParameterValue (pid::envRise)->load(),
+                            apvts.getRawParameterValue (pid::envHold)->load(),
+                            apvts.getRawParameterValue (pid::envFall)->load());
+    {
+        const auto& src = envUseSide ? sideSource : mainBus;
+        const float* eL = src.getReadPointer (0);
+        const float* eR = src.getReadPointer (1);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float lvl = std::fmax (std::fabs (eL[i]), std::fabs (eR[i]));
+            envBuffer_[(size_t) i] = envFollower_.process (eL[i], eR[i]);
+            envScopePeak_ = std::fmax (envScopePeak_, lvl);
+            if (++envScopeCounter_ >= envScopeInterval_)
+            {
+                pushEnvScope ({ envScopePeak_, envBuffer_[(size_t) i] });
+                envScopePeak_ = 0.0f;
+                envScopeCounter_ = 0;
+            }
+        }
+        if (numSamples > 0)
+            telemetry.envMod.store (envBuffer_[(size_t) (numSamples - 1)]
+                                     * apvts.getRawParameterValue (pid::envSens)->load());
+    }
+
     const auto p = collectParams();
     const bool stereo = apvts.getRawParameterValue (pid::stereo)->load() > 0.5f;
     const bool limOn = apvts.getRawParameterValue (pid::limiter)->load() > 0.5f;
     engineL_.setParams (p);
     engineR_.setParams (p);
+
+    // Envelope -> target modulation: upward only, clamped, applied at a
+    // cheap control rate inside the oversampled loop below via setModulated.
+    const float envSens = apvts.getRawParameterValue (pid::envSens)->load();
+    const bool modCutoff = apvts.getRawParameterValue (pid::envToCutoff)->load() > 0.5f;
+    const bool modDrive  = apvts.getRawParameterValue (pid::envToDrive)->load() > 0.5f;
+    const bool modWindow = apvts.getRawParameterValue (pid::envToWindow)->load() > 0.5f;
+    const bool modOffset = apvts.getRawParameterValue (pid::envToOffset)->load() > 0.5f;
+    const bool anyMod = modCutoff || modDrive || modWindow || modOffset;
 
     juce::dsp::AudioBlock<float> mainBlock (mainBus);
     juce::dsp::AudioBlock<float> sideBlock (sideSource);
@@ -144,6 +217,8 @@ void FasalasProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     auto mainUp = osMain_->processSamplesUp (mainBlock);
     auto sideUp = osSide_->processSamplesUp (sideBlock);
     const int osSamples = (int) mainUp.getNumSamples();
+    const int factor = (int) osMain_->getOversamplingFactor();
+    const int controlStride = juce::jmax (1, 16 * factor);
 
     float* mL = mainUp.getChannelPointer (0);
     float* mR = mainUp.getChannelPointer (1);
@@ -154,22 +229,50 @@ void FasalasProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     // UI display and a lot less traffic through the lock-free FIFO.
     const int scopeStride = numSamples > 0 ? juce::jmax (1, osSamples / numSamples) : 1;
 
+    auto applyModulation = [&] (int osIndex)
+    {
+        const int baseIdx = juce::jlimit (0, numSamples - 1, osIndex / factor);
+        const float add = envBuffer_[(size_t) baseIdx] * envSens;
+
+        float cutoffHz = p.cutoffHz, driveDb = p.driveDb, window = p.window, vcoOffset = p.vcoOffset;
+        if (modCutoff)
+            cutoffHz = cutoffParam_->convertFrom0to1 (
+                juce::jlimit (0.0f, 1.0f, cutoffParam_->convertTo0to1 (p.cutoffHz) + add));
+        if (modDrive)
+            driveDb = driveParam_->convertFrom0to1 (
+                juce::jlimit (0.0f, 1.0f, driveParam_->convertTo0to1 (p.driveDb) + add));
+        if (modWindow)
+            window = windowParam_->convertFrom0to1 (
+                juce::jlimit (0.0f, 1.0f, windowParam_->convertTo0to1 (p.window) + add));
+        if (modOffset)
+            vcoOffset = vcoOffsetParam_->convertFrom0to1 (
+                juce::jlimit (0.0f, 1.0f, vcoOffsetParam_->convertTo0to1 (p.vcoOffset) + add));
+
+        engineL_.setModulated (cutoffHz, driveDb, window, vcoOffset);
+        engineR_.setModulated (cutoffHz, driveDb, window, vcoOffset);
+    };
+
     if (stereo)
     {
         EngineTap tap;
         for (int i = 0; i < osSamples; ++i)
         {
+            if (anyMod && (i % controlStride == 0)) applyModulation (i);
             mL[i] = engineL_.process (mL[i], sL[i], mL[i], tap);
             if (i % scopeStride == 0) pushScope (tap);
         }
         for (int i = 0; i < osSamples; ++i)
+        {
+            if (anyMod && (i % controlStride == 0)) applyModulation (i);
             mR[i] = engineR_.process (mR[i], sR[i], mR[i], tap);
+        }
     }
     else
     {
         EngineTap tap;
         for (int i = 0; i < osSamples; ++i)
         {
+            if (anyMod && (i % controlStride == 0)) applyModulation (i);
             const float a = 0.5f * (mL[i] + mR[i]);
             const float b = 0.5f * (sL[i] + sR[i]);
             const float out = engineL_.process (a, b, a, tap);

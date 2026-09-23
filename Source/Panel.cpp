@@ -49,14 +49,40 @@ void FasalasLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int 
         g.strokePath (arc, juce::PathStrokeType (strokeW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
+    // Envelope modulation: a knob with an assign box that is ticked, and an
+    // envelope currently contributing, draws its pointer at the modulated
+    // position, a faint ghost pointer at its own (unmodulated) position, and
+    // a thin violet arc between the two on an outer radius.
+    const bool assignOn = (bool) slider.getProperties().getWithDefault ("assignOn", false);
+    const float envMod = (float) slider.getProperties().getWithDefault ("envMod", 0.0f);
+    const bool modulated = assignOn && envMod > 0.0015f;
+    const float modPos = juce::jlimit (0.0f, 1.0f, sliderPos + envMod);
+    const float modAngle = rotaryStartAngle + modPos * (rotaryEndAngle - rotaryStartAngle);
+
+    if (modulated)
+    {
+        const float capR = radius * 0.52f;
+        const juce::Point<float> g1 (centre.x + capR * 0.3f * std::sin (angle), centre.y - capR * 0.3f * std::cos (angle));
+        const juce::Point<float> g2 (centre.x + capR * 0.88f * std::sin (angle), centre.y - capR * 0.88f * std::cos (angle));
+        g.setColour (hue::fg.withAlpha (0.35f));
+        g.drawLine ({ g1, g2 }, 1.2f);
+
+        const float modR = radius * 0.92f;
+        juce::Path modArc;
+        modArc.addCentredArc (centre.x, centre.y, modR, modR, 0.0f, angle, modAngle, true);
+        g.setColour (hue::env);
+        g.strokePath (modArc, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+
     const float capR = radius * 0.52f;
     g.setColour (hue::cap);
     g.fillEllipse (juce::Rectangle<float> (capR * 2.0f, capR * 2.0f).withCentre (centre));
     g.setColour (hue::line2);
     g.drawEllipse (juce::Rectangle<float> (capR * 2.0f, capR * 2.0f).withCentre (centre), 1.0f);
 
-    const juce::Point<float> p1 (centre.x + capR * 0.3f * std::sin (angle), centre.y - capR * 0.3f * std::cos (angle));
-    const juce::Point<float> p2 (centre.x + capR * 0.88f * std::sin (angle), centre.y - capR * 0.88f * std::cos (angle));
+    const float pointerAngle = modulated ? modAngle : angle;
+    const juce::Point<float> p1 (centre.x + capR * 0.3f * std::sin (pointerAngle), centre.y - capR * 0.3f * std::cos (pointerAngle));
+    const juce::Point<float> p2 (centre.x + capR * 0.88f * std::sin (pointerAngle), centre.y - capR * 0.88f * std::cos (pointerAngle));
     g.setColour (hue::fg);
     g.drawLine ({ p1, p2 }, 2.0f);
 }
@@ -66,13 +92,14 @@ void FasalasLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& 
 {
     const auto bounds = b.getLocalBounds().toFloat();
     const bool amber = (bool) b.getProperties().getWithDefault ("amber", false);
+    const bool env = (bool) b.getProperties().getWithDefault ("env", false);
     const bool on = b.getToggleState();
 
     juce::Colour fill = juce::Colours::transparentBlack;
     juce::Colour border = amber ? hue::amber.withAlpha (0.55f) : hue::line2;
 
-    if (on)       { fill = amber ? hue::amber : hue::fg; border = fill; }
-    else if (isHighlighted) { border = amber ? hue::amber : hue::fg; }
+    if (on)       { fill = amber ? hue::amber : (env ? hue::env : hue::fg); border = fill; }
+    else if (isHighlighted) { border = amber ? hue::amber : (env ? hue::env : hue::fg); }
 
     g.setColour (fill);
     g.fillRoundedRectangle (bounds, 2.0f);
@@ -83,11 +110,12 @@ void FasalasLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& 
 void FasalasLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool isHighlighted, bool)
 {
     const bool amber = (bool) b.getProperties().getWithDefault ("amber", false);
+    const bool env = (bool) b.getProperties().getWithDefault ("env", false);
     const bool on = b.getToggleState();
 
     juce::Colour c;
-    if (on)                 c = amber ? hue::well : hue::bg;
-    else if (isHighlighted) c = amber ? hue::amber : hue::fg;
+    if (on)                 c = amber ? hue::well : (env ? hue::well : hue::bg);
+    else if (isHighlighted) c = amber ? hue::amber : (env ? hue::env : hue::fg);
     else                    c = amber ? juce::Colour (0xffdcae45) : hue::muted;
 
     g.setColour (c);
@@ -100,10 +128,37 @@ juce::Font FasalasLookAndFeel::getTextButtonFont (juce::TextButton&, int buttonH
     return juce::Font (juce::jmin (11.0f, buttonHeight * 0.52f)).withExtraKerningFactor (0.05f);
 }
 
+// ─────────────────────────────── AssignBox ──────────────────────────────
+
+void AssignBox::paintButton (juce::Graphics& g, bool isHighlighted, bool)
+{
+    auto r = getLocalBounds().toFloat().reduced (0.5f);
+    const bool on = getToggleState();
+
+    if (on)
+        g.setColour (hue::env);
+    else
+        g.setColour (hue::env.withAlpha (isHighlighted ? 1.0f : 0.6f));
+
+    if (on)
+        g.fillRoundedRectangle (r, 2.0f);
+    g.drawRoundedRectangle (r, 2.0f, 1.0f);
+
+    if (on)
+    {
+        juce::Path tick;
+        tick.startNewSubPath (r.getX() + r.getWidth() * 0.22f, r.getY() + r.getHeight() * 0.52f);
+        tick.lineTo (r.getX() + r.getWidth() * 0.42f, r.getY() + r.getHeight() * 0.76f);
+        tick.lineTo (r.getX() + r.getWidth() * 0.80f, r.getY() + r.getHeight() * 0.24f);
+        g.setColour (hue::well);
+        g.strokePath (tick, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+}
+
 // ─────────────────────────────── Knob ──────────────────────────────────
 
 Knob::Knob (juce::AudioProcessorValueTreeState& state, const juce::String& paramID,
-            const juce::String& displayName, juce::Colour accent)
+            const juce::String& displayName, juce::Colour accent, const juce::String& assignParamID)
     : param_ (state.getParameter (paramID))
 {
     jassert (param_ != nullptr);
@@ -133,6 +188,17 @@ Knob::Knob (juce::AudioProcessorValueTreeState& state, const juce::String& param
     attachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, paramID, slider_);
     refreshValue();
 
+    if (assignParamID.isNotEmpty())
+    {
+        assignBox_ = std::make_unique<AssignBox>();
+        addAndMakeVisible (*assignBox_);
+        assignAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+            state, assignParamID, *assignBox_);
+        // Repaint the arc the instant the box itself is toggled, without
+        // waiting for the next refresh() tick.
+        assignBox_->onStateChange = [this] { slider_.repaint(); };
+    }
+
     setSize (54, 76);
 }
 
@@ -142,17 +208,55 @@ void Knob::resized()
     nameLabel_.setBounds (r.removeFromTop (14));
     valueLabel_.setBounds (r.removeFromBottom (14));
     slider_.setBounds (r.reduced (3));
+
+    if (assignBox_ != nullptr)
+        assignBox_->setBounds (getWidth() - 13, 14, 11, 11);
 }
 
 void Knob::refreshValue()
 {
     valueLabel_.setText (param_->getCurrentValueAsText(), juce::dontSendNotification);
+    valueLabel_.setColour (juce::Label::textColourId, hue::fg);
+}
+
+void Knob::setModulation (float envMod)
+{
+    if (assignBox_ == nullptr) return;
+
+    const bool assignOn = assignBox_->getToggleState();
+    const bool modulated = assignOn && envMod > 0.0015f;
+
+    auto& props = slider_.getProperties();
+    const bool prevOn = (bool) props.getWithDefault ("assignOn", false);
+    const float prevMod = (float) props.getWithDefault ("envMod", 0.0f);
+    if (prevOn != assignOn || std::abs (prevMod - envMod) > 0.0005f)
+    {
+        props.set ("assignOn", assignOn);
+        props.set ("envMod", envMod);
+        slider_.repaint();
+    }
+
+    if (modulated)
+    {
+        const float baseNorm = param_->getValue();
+        const float modNorm = juce::jlimit (0.0f, 1.0f, baseNorm + envMod);
+        const juce::String txt = param_->getText (modNorm, 0);
+        if (txt != valueLabel_.getText())
+        {
+            valueLabel_.setText (txt, juce::dontSendNotification);
+            valueLabel_.setColour (juce::Label::textColourId, hue::env);
+        }
+    }
+    else if (valueLabel_.findColour (juce::Label::textColourId) != hue::fg)
+    {
+        refreshValue();
+    }
 }
 
 // ─────────────────────────────── Pills ─────────────────────────────────
 
 Pills::Pills (juce::AudioProcessorValueTreeState& state, const juce::String& paramID,
-              const juce::StringArray& labels, juce::Colour accent)
+              const juce::StringArray& labels, juce::Colour accent, bool envAccent)
 {
     auto* param = state.getParameter (paramID);
     jassert (param != nullptr);
@@ -170,6 +274,8 @@ Pills::Pills (juce::AudioProcessorValueTreeState& state, const juce::String& par
         auto* b = buttons_.add (new juce::TextButton (labels[i]));
         addAndMakeVisible (b);
         setAccent (*b, accent);
+        if (envAccent)
+            b->getProperties().set ("env", true);
         b->setClickingTogglesState (true);
         b->setRadioGroupId (groupId, juce::dontSendNotification);
         b->setToggleState (i == current, juce::dontSendNotification);
@@ -233,7 +339,14 @@ void Lamp::paint (juce::Graphics& g)
 
 // ─────────────────────────────── Module ────────────────────────────────
 
-Module::Module (juce::String title, juce::Colour accent) : title_ (title), accent_ (accent) {}
+Module::Module (juce::String title, juce::Colour accent) : title_ (title), accent_ (accent)
+{
+    tag_.setJustificationType (juce::Justification::centredRight);
+    tag_.setFont (juce::Font (8.5f).withExtraKerningFactor (0.08f));
+    tag_.setColour (juce::Label::textColourId, hue::env);
+    tag_.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (tag_);
+}
 
 void Module::paint (juce::Graphics& g)
 {
@@ -247,6 +360,14 @@ void Module::paint (juce::Graphics& g)
     g.setFont (juce::Font (9.5f).withExtraKerningFactor (0.07f));
     g.drawFittedText (title_.toUpperCase(), head.withTrimmedLeft (14), juce::Justification::centredLeft, 1);
 }
+
+void Module::resized()
+{
+    auto head = getLocalBounds().withTrimmedLeft (8).removeFromTop (18);
+    tag_.setBounds (head.removeFromRight (92).withTrimmedRight (2));
+}
+
+void Module::setTag (const juce::String& s) { tag_.setText (s, juce::dontSendNotification); }
 
 // Content starts right under the title — the row below reads as that title's
 // own row, not a separate floating block.
@@ -334,6 +455,81 @@ void Scope::paint (juce::Graphics& g)
     }
 }
 
+// ─────────────────────────────── EnvScope ───────────────────────────────
+
+void EnvScope::pull (FasalasProcessor& proc)
+{
+    EnvScopeSample buf[128];
+    int n;
+    bool any = false;
+    while ((n = proc.drainEnvScope (buf, 128)) > 0)
+    {
+        any = true;
+        for (int i = 0; i < n; ++i)
+        {
+            inputBuf_[(size_t) writeIndex_] = buf[i].input;
+            envBuf_[(size_t) writeIndex_]   = buf[i].env;
+            writeIndex_ = (writeIndex_ + 1) % historyLength;
+        }
+    }
+    if (any) repaint();
+}
+
+void EnvScope::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+    g.setColour (hue::well);
+    g.fillRoundedRectangle (r, 2.0f);
+
+    if (getWidth() > 1 && getHeight() > 4)
+    {
+        juce::Graphics::ScopedSaveState save (g);
+        juce::Path clip;
+        clip.addRoundedRectangle (r, 2.0f);
+        g.reduceClipRegion (clip);
+
+        const float pad = 3.0f;
+        const float baseline = r.getBottom() - pad;
+        const float top = r.getY() + pad;
+        const float h = baseline - top;
+        const float xs = (float) getWidth() / (float) (historyLength - 1);
+
+        if (h > 0.0f)
+        {
+            juce::Path fillPath;
+            fillPath.startNewSubPath (0.0f, baseline);
+            for (int i = 0; i < historyLength; ++i)
+            {
+                const int idx = (writeIndex_ + i) % historyLength;
+                const float v = juce::jlimit (0.0f, 1.0f, inputBuf_[(size_t) idx]);
+                fillPath.lineTo ((float) i * xs, baseline - v * h);
+            }
+            fillPath.lineTo ((float) getWidth(), baseline);
+            fillPath.closeSubPath();
+            g.setColour (hue::muted.withAlpha (0.22f));
+            g.fillPath (fillPath);
+
+            juce::Path envPath;
+            for (int i = 0; i < historyLength; ++i)
+            {
+                const int idx = (writeIndex_ + i) % historyLength;
+                const float v = juce::jlimit (0.0f, 1.0f, envBuf_[(size_t) idx]);
+                const float x = (float) i * xs, y = baseline - v * h;
+                if (i == 0) envPath.startNewSubPath (x, y); else envPath.lineTo (x, y);
+            }
+            g.setColour (hue::env);
+            g.strokePath (envPath, juce::PathStrokeType (1.4f));
+        }
+    }
+
+    g.setColour (hue::line2);
+    g.drawRoundedRectangle (r.reduced (0.5f), 2.0f, 1.0f);
+
+    g.setColour (hue::muted);
+    g.setFont (juce::Font (8.5f).withExtraKerningFactor (0.05f));
+    g.drawText (sourceLabel_, getLocalBounds().reduced (5, 3), juce::Justification::topLeft);
+}
+
 // ─────────────────────────────── Panel ─────────────────────────────────
 
 Panel::Panel (FasalasProcessor& proc)
@@ -344,21 +540,27 @@ Panel::Panel (FasalasProcessor& proc)
       divA_ (proc.apvts, pid::divA, juce::String::fromUTF8 ("\xc3\xb7 Main"), hue::p4blue),
       divB_ (proc.apvts, pid::divB, juce::String::fromUTF8 ("\xc3\xb7 Side"), hue::p2pink),
       stereo_ (proc.apvts, pid::stereo, { "Mono", "Stereo" }, hue::p4blue),
+      envSource_ (proc.apvts, pid::envSource, { "MAIN", "SIDE" }, hue::env, true),
+      envSens_ (proc.apvts, pid::envSens, "Sensitivity", hue::env),
+      envRise_ (proc.apvts, pid::envRise, "Rise", hue::env),
+      envHold_ (proc.apvts, pid::envHold, "Hold", hue::env),
+      envFall_ (proc.apvts, pid::envFall, "Fall", hue::env),
       mode_ (proc.apvts, pid::mode, { "XOR", "RS", "PFD", "CMP", "WIN" }, hue::p3rose),
-      window_ (proc.apvts, pid::window, "Window", hue::p3rose),
+      window_ (proc.apvts, pid::window, "Window", hue::p3rose, pid::envToWindow),
       rise_ (proc.apvts, pid::rise, "Rise", hue::p1lilac),
       fall_ (proc.apvts, pid::fall, "Fall", hue::p1lilac),
       shape_ (proc.apvts, pid::shape, { "LIN", "EXP" }, hue::p1lilac),
       link_ (proc.apvts, pid::link, "Link", hue::p1lilac),
       loop_ (proc.apvts, pid::loop, "Loop", hue::p1lilac),
-      vcoOffset_ (proc.apvts, pid::vcoOffset, "Offset", hue::p1lilac),
+      vcoOffset_ (proc.apvts, pid::vcoOffset, "Offset", hue::p1lilac, pid::envToOffset),
+      vcoSoften_ (proc.apvts, pid::vcoSoften, "Soften", hue::p1lilac),
       vcoRange_ (proc.apvts, pid::vcoRange, { "LO", "MID", "HI" }, hue::p1lilac),
       loopTrack_ (proc.apvts, pid::loopTrack, { "MAIN", "SIDE" }, hue::p1lilac),
       filterType_ (proc.apvts, pid::filterType, { "LP", "BP", "HP", "NT" }, hue::p5sky),
       filterSlope_ (proc.apvts, pid::filterSlope, { "12", "24" }, hue::p5sky),
-      cutoff_ (proc.apvts, pid::cutoff, "Cutoff", hue::p5sky),
+      cutoff_ (proc.apvts, pid::cutoff, "Cutoff", hue::p5sky, pid::envToCutoff),
       resonance_ (proc.apvts, pid::resonance, "Resonance", hue::p5sky),
-      drive_ (proc.apvts, pid::drive, "Drive", hue::p5sky),
+      drive_ (proc.apvts, pid::drive, "Drive", hue::p5sky, pid::envToDrive),
       mix_ (proc.apvts, pid::mix, "Mix", hue::fg),
       level_ (proc.apvts, pid::level, "Level", hue::fg),
       lim_ (proc.apvts, pid::limiter, "Lim", hue::amber)
@@ -379,17 +581,20 @@ Panel::Panel (FasalasProcessor& proc)
     addAndMakeVisible (lockLed_);
     lockLed_.setSize (11, 11);
 
-    for (auto* m : { &inMod_, &cmpMod_, &slewMod_, &loopMod_, &filtMod_, &outMod_ })
+    for (auto* m : { &inMod_, &envMod_, &cmpMod_, &slewMod_, &loopMod_, &filtMod_, &outMod_ })
         addAndMakeVisible (m);
     for (auto* c : { (juce::Component*) &gainA_, (juce::Component*) &gainB_, (juce::Component*) &hyst_,
                       (juce::Component*) &divA_, (juce::Component*) &divB_, (juce::Component*) &stereo_ })
         inMod_.addAndMakeVisible (c);
+    for (auto* c : { (juce::Component*) &envSource_, (juce::Component*) &envSens_, (juce::Component*) &envRise_,
+                      (juce::Component*) &envHold_, (juce::Component*) &envFall_, (juce::Component*) &envScope_ })
+        envMod_.addAndMakeVisible (c);
     for (auto* c : { (juce::Component*) &mode_, (juce::Component*) &window_ })
         cmpMod_.addAndMakeVisible (c);
     for (auto* c : { (juce::Component*) &rise_, (juce::Component*) &fall_,
                       (juce::Component*) &shape_, (juce::Component*) &link_ })
         slewMod_.addAndMakeVisible (c);
-    for (auto* c : { (juce::Component*) &loop_, (juce::Component*) &vcoOffset_,
+    for (auto* c : { (juce::Component*) &loop_, (juce::Component*) &vcoOffset_, (juce::Component*) &vcoSoften_,
                       (juce::Component*) &vcoRange_, (juce::Component*) &loopTrack_ })
         loopMod_.addAndMakeVisible (c);
     for (auto* c : { (juce::Component*) &filterType_, (juce::Component*) &filterSlope_,
@@ -418,7 +623,7 @@ Panel::Panel (FasalasProcessor& proc)
 
     addAndMakeVisible (scope_);
 
-    setSize (940, 640);
+    setSize (940, 680);
 }
 
 Panel::~Panel() { juce::LookAndFeel::setDefaultLookAndFeel (nullptr); }
@@ -442,6 +647,29 @@ void Panel::layoutRow (juce::Rectangle<int> area, std::initializer_list<juce::Co
     }
 }
 
+// Lays out components in weighted columns across area, each trimmed by 1px
+// right/bottom so the 1px background shows through as a grid gap, the same
+// look the module grid has always had. The last column takes whatever width
+// is left, so rounding never leaves a sliver at the row's right edge.
+void Panel::layoutCols (juce::Rectangle<int> area, std::initializer_list<std::pair<juce::Component*, float>> cols)
+{
+    float totalWeight = 0.0f;
+    for (auto& c : cols) totalWeight += c.second;
+
+    const int n = (int) cols.size();
+    int x = area.getX();
+    int i = 0;
+    for (auto& c : cols)
+    {
+        const int w = (i == n - 1) ? (area.getRight() - x)
+                                    : juce::roundToInt ((float) area.getWidth() * (c.second / totalWeight));
+        juce::Rectangle<int> cell (x, area.getY(), w, area.getHeight());
+        c.first->setBounds (cell.withTrimmedRight (1).withTrimmedBottom (1));
+        x += w;
+        ++i;
+    }
+}
+
 void Panel::resized()
 {
     auto r = getLocalBounds();
@@ -456,19 +684,13 @@ void Panel::resized()
     // The module grid is a fixed height sized to what its controls actually
     // need — it does not stretch to fill the window. Any extra height the
     // window is resized to goes to the scope below instead of empty space.
-    const int rowH = 150;
-    auto gridArea = r.removeFromTop (rowH * 2);
-    const int colW = gridArea.getWidth() / 3;
+    const int row1H = 180; // Input · Env follower · Comparator
+    const int row2H = 150; // Slew · Loop·VCO · Filter · Output
+    auto row1Area = r.removeFromTop (row1H);
+    auto row2Area = r.removeFromTop (row2H);
 
-    juce::Rectangle<int> cells[6];
-    for (int i = 0; i < 6; ++i)
-        cells[i] = { gridArea.getX() + (i % 3) * colW, gridArea.getY() + (i / 3) * rowH, colW, rowH };
-    cells[2].setWidth (gridArea.getRight() - cells[2].getX());
-    cells[5].setWidth (gridArea.getRight() - cells[5].getX());
-
-    Module* mods[6] = { &inMod_, &cmpMod_, &slewMod_, &loopMod_, &filtMod_, &outMod_ };
-    for (int i = 0; i < 6; ++i)
-        mods[i]->setBounds (cells[i].withTrimmedRight (1).withTrimmedBottom (1));
+    layoutCols (row1Area, { { &inMod_, 1.08f }, { &envMod_, 1.14f }, { &cmpMod_, 0.9f } });
+    layoutCols (row2Area, { { &slewMod_, 0.72f }, { &loopMod_, 1.05f }, { &filtMod_, 1.1f }, { &outMod_, 0.72f } });
 
     scope_.setBounds (r.reduced (2, 4));
 
@@ -477,6 +699,14 @@ void Panel::resized()
         auto row2 = a.removeFromBottom (26);
         layoutRow (a, { &gainA_, &gainB_, &hyst_, &divA_, &divB_ }, 4);
         layoutRow (row2, { &stereo_ }, 0);
+    }
+    {
+        auto a = envMod_.contentArea();
+        auto row1 = a.removeFromTop (24);
+        auto row3 = a.removeFromBottom (46);
+        layoutRow (row1, { &envSource_ }, 0);
+        layoutRow (a, { &envSens_, &envRise_, &envHold_, &envFall_ }, 6);
+        envScope_.setBounds (row3);
     }
     {
         auto a = cmpMod_.contentArea();
@@ -495,7 +725,7 @@ void Panel::resized()
         auto row1 = a.removeFromTop (26);
         auto row3 = a.removeFromBottom (26);
         layoutRow (row1, { &loop_, &vcoReadout_ }, 10);
-        layoutRow (a, { &vcoOffset_ }, 0);
+        layoutRow (a, { &vcoOffset_, &vcoSoften_ }, 8);
         layoutRow (row3, { &vcoRange_, &loopTrack_ }, 16);
     }
     {
@@ -515,6 +745,26 @@ void Panel::resized()
 void Panel::refresh()
 {
     scope_.pull (proc_);
+    envScope_.pull (proc_);
+
+    const bool envSide = proc_.apvts.getRawParameterValue (pid::envSource)->load() > 0.5f;
+    envScope_.setSourceLabel (envSide ? "SIDE" : "MAIN");
+
+    const bool envToCutoffOn = proc_.apvts.getRawParameterValue (pid::envToCutoff)->load() > 0.5f;
+    const bool envToDriveOn  = proc_.apvts.getRawParameterValue (pid::envToDrive)->load() > 0.5f;
+    const bool envToWindowOn = proc_.apvts.getRawParameterValue (pid::envToWindow)->load() > 0.5f;
+    const bool envToOffsetOn = proc_.apvts.getRawParameterValue (pid::envToOffset)->load() > 0.5f;
+    const int numTargets = (envToCutoffOn ? 1 : 0) + (envToDriveOn ? 1 : 0)
+                            + (envToWindowOn ? 1 : 0) + (envToOffsetOn ? 1 : 0);
+    envMod_.setTag (numTargets == 0 ? juce::String ("no targets")
+                                     : (juce::String::fromUTF8 ("\xe2\x86\x92 ") + juce::String (numTargets)
+                                        + (numTargets > 1 ? " targets" : " target")));
+
+    const float envMod = proc_.telemetry.envMod.load();
+    window_.setModulation (envMod);
+    vcoOffset_.setModulation (envMod);
+    cutoff_.setModulation (envMod);
+    drive_.setModulation (envMod);
 
     const auto& t = proc_.telemetry;
     const bool locked = t.locked.load();

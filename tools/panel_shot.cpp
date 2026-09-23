@@ -3,6 +3,8 @@
 // directory given as argv[1].
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <cmath>
+
 #include "Panel.h"
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
@@ -45,6 +47,14 @@ int main (int argc, char** argv)
     setValue (proc, pid::divB, 2.0f);
     setNorm  (proc, pid::stereo, 1.0f); // Stereo
 
+    setNorm  (proc, pid::envSource, 1.0f); // Side
+    setNorm  (proc, pid::envSens, 0.6f);
+    setValue (proc, pid::envRise, 2.0f);
+    setValue (proc, pid::envHold, 40.0f);
+    setValue (proc, pid::envFall, 180.0f);
+    setNorm  (proc, pid::envToCutoff, 1.0f);
+    setNorm  (proc, pid::envToDrive, 1.0f);
+
     setNorm  (proc, pid::mode, 2.0f / 4.0f); // PFD
     setNorm  (proc, pid::window, 0.3f);
 
@@ -56,6 +66,7 @@ int main (int argc, char** argv)
     setNorm  (proc, pid::loop, 1.0f); // on
     setNorm  (proc, pid::vcoRange, 1.0f / 2.0f); // Mid
     setValue (proc, pid::vcoOffset, 6.5f);
+    setValue (proc, pid::vcoSoften, 0.35f);
     setNorm  (proc, pid::loopTrack, 0.0f); // Main
 
     setNorm  (proc, pid::filterType, 0.0f); // Low Pass
@@ -69,13 +80,20 @@ int main (int argc, char** argv)
     setNorm  (proc, pid::limiter, 1.0f); // on
 
     // Push real signal through it so the lock LED, the limiter lamp and the
-    // frequency readouts all show a genuine state rather than their rest values.
+    // frequency readouts all show a genuine state rather than their rest
+    // values. The sidechain is a kick-like pulse train — a 60 Hz sine burst
+    // with a fast exponential decay, retriggered every 0.5 s — so the
+    // envelope follower's rise/hold/fall are visibly doing something in both
+    // the mini scope and the violet modulation arcs.
     juce::AudioBuffer<float> buffer (4, blockSize); // [mainL mainR sideL sideR]
     juce::MidiBuffer midi;
     double phaseMain = 0.0, phaseSide = 0.0;
-    const double freqMain = 110.0, freqSide = 220.0;
+    const double freqMain = 110.0, freqSide = 60.0;
+    const double kickPeriod = 0.5, kickDecay = 0.07;
+    double t = 0.0;
 
-    for (int block = 0; block < 60; ++block)
+    const int numBlocks = (int) std::ceil (2.2 * sr / (double) blockSize) + 4; // > 2 s so the 2 s mini scope fills
+    for (int block = 0; block < numBlocks; ++block)
     {
         buffer.clear();
         auto* mL = buffer.getWritePointer (0);
@@ -85,12 +103,16 @@ int main (int argc, char** argv)
 
         for (int i = 0; i < blockSize; ++i)
         {
+            const double kickPhase = std::fmod (t, kickPeriod);
+            const float env = (float) std::exp (-kickPhase / kickDecay);
+
             const float m = 0.7f * (float) std::sin (phaseMain);
-            const float s = 0.7f * (float) std::sin (phaseSide);
+            const float s = 0.85f * env * (float) std::sin (phaseSide);
             mL[i] = m; mR[i] = m;
             sL[i] = s; sR[i] = s;
             phaseMain += juce::MathConstants<double>::twoPi * freqMain / sr;
             phaseSide += juce::MathConstants<double>::twoPi * freqSide / sr;
+            t += 1.0 / sr;
         }
 
         proc.processBlock (buffer, midi);
@@ -98,7 +120,7 @@ int main (int argc, char** argv)
 
     auto* fasalasEditor = new FasalasEditor (proc);
     std::unique_ptr<juce::AudioProcessorEditor> editor (fasalasEditor);
-    editor->setSize (940, 640);
+    editor->setSize (940, 680);
     fasalasEditor->refreshTelemetryNow();
 
     const float scale = 2.0f;

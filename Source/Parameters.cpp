@@ -14,6 +14,16 @@ const juce::String divA       = "diva";
 const juce::String divB       = "divb";
 const juce::String stereo     = "stereo";
 
+const juce::String envSource    = "envsource";
+const juce::String envSens      = "envsens";
+const juce::String envRise      = "envrise";
+const juce::String envHold      = "envhold";
+const juce::String envFall      = "envfall";
+const juce::String envToCutoff  = "envtocutoff";
+const juce::String envToDrive   = "envtodrive";
+const juce::String envToWindow  = "envtowindow";
+const juce::String envToOffset  = "envtooffset";
+
 const juce::String mode       = "mode";
 const juce::String window     = "window";
 
@@ -25,6 +35,7 @@ const juce::String shape      = "shape";
 const juce::String loop       = "loop";
 const juce::String vcoRange   = "vcorange";
 const juce::String vcoOffset  = "vcooffset";
+const juce::String vcoSoften  = "vcosoften";
 const juce::String loopTrack  = "looptrack";
 
 const juce::String filterType  = "filtertype";
@@ -97,6 +108,26 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     params.push_back (std::make_unique<AudioParameterBool> (
         ParameterID { pid::stereo, 1 }, "Stereo", true));
 
+    // ── Env follower ───────────────────────────────────────────────────
+    params.push_back (std::make_unique<AudioParameterChoice> (
+        ParameterID { pid::envSource, 1 }, "Env Source", StringArray { "Main", "Side" }, 1));
+    params.push_back (std::make_unique<AudioParameterFloat> (
+        ParameterID { pid::envSens, 1 }, "Sensitivity", NormalisableRange<float> (0.0f, 1.0f), 0.6f, pctAttrs));
+    params.push_back (std::make_unique<AudioParameterFloat> (
+        ParameterID { pid::envRise, 1 }, "Env Rise", logRange (0.1f, 1000.0f), 2.0f, msAttrs));
+    params.push_back (std::make_unique<AudioParameterFloat> (
+        ParameterID { pid::envHold, 1 }, "Env Hold", NormalisableRange<float> (0.0f, 1000.0f), 40.0f, msAttrs));
+    params.push_back (std::make_unique<AudioParameterFloat> (
+        ParameterID { pid::envFall, 1 }, "Env Fall", logRange (1.0f, 5000.0f), 180.0f, msAttrs));
+    params.push_back (std::make_unique<AudioParameterBool> (
+        ParameterID { pid::envToCutoff, 1 }, "Env to Cutoff", true));
+    params.push_back (std::make_unique<AudioParameterBool> (
+        ParameterID { pid::envToDrive, 1 }, "Env to Drive", true));
+    params.push_back (std::make_unique<AudioParameterBool> (
+        ParameterID { pid::envToWindow, 1 }, "Env to Window", false));
+    params.push_back (std::make_unique<AudioParameterBool> (
+        ParameterID { pid::envToOffset, 1 }, "Env to Offset", false));
+
     // ── Comparator ─────────────────────────────────────────────────────
     params.push_back (std::make_unique<AudioParameterChoice> (
         ParameterID { pid::mode, 1 }, "Comparator Mode",
@@ -121,6 +152,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
         ParameterID { pid::vcoRange, 1 }, "VCO Range", StringArray { "Low", "Mid", "High" }, 1));
     params.push_back (std::make_unique<AudioParameterFloat> (
         ParameterID { pid::vcoOffset, 1 }, "VCO Offset", NormalisableRange<float> (0.0f, 10.0f), 5.0f, plainAttrs));
+    params.push_back (std::make_unique<AudioParameterFloat> (
+        ParameterID { pid::vcoSoften, 1 }, "Soften", NormalisableRange<float> (0.0f, 1.0f), 0.35f, pctAttrs));
     params.push_back (std::make_unique<AudioParameterChoice> (
         ParameterID { pid::loopTrack, 1 }, "Loop Locks To", StringArray { "Main", "Side" }, 0));
 

@@ -8,8 +8,8 @@ FasalasEditor::FasalasEditor (FasalasProcessor& p)
 {
     addAndMakeVisible (panel_);
     setResizable (true, true);
-    setResizeLimits (920, 480, 1500, 900);
-    setSize (940, 640);
+    setResizeLimits (920, 540, 1500, 960);
+    setSize (940, 680);
     startTimerHz (30);
 }
 

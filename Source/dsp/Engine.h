@@ -38,6 +38,7 @@ struct EngineParams
     bool loopLockToMain = true;   // false = locks to the sidechain instead
     VcoRange vcoRange = VcoRange::mid;
     float vcoOffset = 5.0f;
+    float soften = 0.35f;
 
     FilterType filterType = FilterType::lowpass;
     FilterSlope filterSlope = FilterSlope::twentyFour;
@@ -86,18 +87,35 @@ public:
         slew_.setTimes (p.riseMs, p.fallMs);
 
         loop_ = p.loopOn; lockToMain_ = p.loopLockToMain;
+        vcoRange_ = p.vcoRange;
         const auto top = vcoTopFrequency (p.vcoRange, p.vcoOffset);
         const auto lo  = vcoRangeTable (p.vcoRange).lo;
         vcoLo_ = lo;
         vcoHi_ = std::min (top, (float) (0.45 * sampleRate_));
+        soften_ = p.soften;
 
         filter_.setType (p.filterType);
         filter_.setSlope (p.filterSlope);
-        filter_.setParams (p.cutoffHz, p.resonance);
+        resonance_ = p.resonance;
+        filter_.setParams (p.cutoffHz, resonance_);
 
         driveLin_ = dbToLin (p.driveDb);
         mix_ = p.mix;
         levelLin_ = dbToLin (p.levelDb);
+    }
+
+    /** Cheap per-control-tick update for just the four envelope-modulatable
+     * targets — cutoff, drive, window and the VCO's top frequency — without
+     * touching gains, dividers, comparator mode or slew times the way the
+     * full setParams() does. Called far more often than setParams(), so it
+     * only recomputes what these four actually feed. */
+    void setModulated (float cutoffHz, float driveDb, float window, float vcoOffset)
+    {
+        filter_.setParams (cutoffHz, resonance_);
+        driveLin_ = dbToLin (driveDb);
+        window_ = window;
+        const auto top = vcoTopFrequency (vcoRange_, vcoOffset);
+        vcoHi_ = std::min (top, (float) (0.45 * sampleRate_));
     }
 
     /** dry is the raw main input (before any gain), used for the dry/wet blend. */
@@ -112,7 +130,7 @@ public:
             // Loop mode: the slew output is a linear CV for the VCO, which
             // replaces the main input at comparator input 1 (as on the module).
             const float cv = std::clamp (slew_.current(), -1.0f, 1.0f);
-            vcoOut = vco_.process (cv, vcoLo_, vcoHi_);
+            vcoOut = vco_.process (cv, vcoLo_, vcoHi_, soften_);
             b = lockToMain_ ? a : b;
             a = vcoOut;
         }
@@ -183,6 +201,9 @@ private:
 
     bool loop_ = false, lockToMain_ = true;
     float vcoLo_ = 20.0f, vcoHi_ = 500.0f;
+    VcoRange vcoRange_ = VcoRange::mid;
+    float soften_ = 0.35f;
+    float resonance_ = 0.35f;
 
     float driveLin_ = 1.0f, mix_ = 1.0f, levelLin_ = 1.0f;
     float dcX_ = 0.0f, dcY_ = 0.0f;

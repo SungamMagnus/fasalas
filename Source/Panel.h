@@ -28,6 +28,7 @@ static const juce::Colour p3rose   { 0xffffafcc }; // Comparator
 static const juce::Colour p4blue   { 0xffbde0fe }; // Input, lock LED
 static const juce::Colour p5sky    { 0xffa2d2fe }; // Filter
 static const juce::Colour amber    { 0xffc08d16 }; // the limiter, and nothing else
+static const juce::Colour env      { 0xffa99bf0 }; // modulation only: env knobs, arcs, assign boxes
 }
 
 class FasalasLookAndFeel : public juce::LookAndFeel_V4
@@ -49,29 +50,57 @@ public:
 juce::Colour accentOf (const juce::Component&);
 void setAccent (juce::Component&, juce::Colour);
 
-/** One rotary control: name above, live value below, coloured progress arc. */
+/** The small violet checkbox that assigns the envelope follower to a knob's
+ * target (Window, Offset, Cutoff, Drive) — 11x11, hand-painted rather than
+ * routed through the LookAndFeel since nothing else on the panel looks like
+ * it. Remember setClickingTogglesState(true): a ButtonAttachment reads
+ * getToggleState() on click, and without it the box never actually toggles. */
+class AssignBox : public juce::Button
+{
+public:
+    AssignBox() : juce::Button ("assign") { setClickingTogglesState (true); }
+    void paintButton (juce::Graphics&, bool isHighlighted, bool isDown) override;
+};
+
+/** One rotary control: name above, live value below, coloured progress arc.
+ * Optionally carries an AssignBox bound to a bool parameter (envtocutoff and
+ * friends) at its top-right corner; when that box is ticked and the
+ * envelope follower is contributing, the knob also draws a ghost pointer at
+ * its own position and a violet arc out to where the modulation has pushed
+ * it, via setModulation(). */
 class Knob : public juce::Component
 {
 public:
     Knob (juce::AudioProcessorValueTreeState&, const juce::String& paramID,
-          const juce::String& displayName, juce::Colour accent);
+          const juce::String& displayName, juce::Colour accent,
+          const juce::String& assignParamID = {});
     void resized() override;
+
+    /** Called from the editor's UI timer with the envelope's current
+     * env * sensitivity. No-op on a knob with no assign box. Only touches
+     * the label text/colour or repaints when something actually changed. */
+    void setModulation (float envMod);
 
 private:
     juce::RangedAudioParameter* param_;
     juce::Slider slider_;
     juce::Label nameLabel_, valueLabel_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment_;
+    std::unique_ptr<AssignBox> assignBox_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> assignAttachment_;
 
     void refreshValue();
 };
 
-/** A row of mutually-exclusive pill buttons bound to a choice or bool parameter. */
+/** A row of mutually-exclusive pill buttons bound to a choice or bool parameter.
+ * envAccent renders the selected pill violet (fill) with a well-dark label,
+ * the same way the amber flag renders the limiter pill amber — used only for
+ * the envelope follower's Main/Side source pills. */
 class Pills : public juce::Component
 {
 public:
     Pills (juce::AudioProcessorValueTreeState&, const juce::String& paramID,
-           const juce::StringArray& labels, juce::Colour accent);
+           const juce::StringArray& labels, juce::Colour accent, bool envAccent = false);
     void resized() override;
 
 private:
@@ -108,17 +137,23 @@ private:
 
 /** One titled section of the panel — a coloured heading dot, a title, and
  * whatever rows of controls the caller lays out inside contentArea(). The
- * title sits directly above its row, not as a separate detached band. */
+ * title sits directly above its row, not as a separate detached band. An
+ * optional right-aligned tag (only the envelope follower uses it, for its
+ * "-> N targets" readout) lives in the same header strip. */
 class Module : public juce::Component
 {
 public:
     Module (juce::String title, juce::Colour accent);
     void paint (juce::Graphics&) override;
+    void resized() override;
     juce::Rectangle<int> contentArea() const;
+
+    void setTag (const juce::String&);
 
 private:
     juce::String title_;
     juce::Colour accent_;
+    juce::Label tag_;
 };
 
 /** A five-lane scrolling oscilloscope: main, reference, comparator, slew and
@@ -135,9 +170,27 @@ private:
     int writeIndex_ = 0;
 };
 
-/** The whole plugin panel: six modules in a 3x2 grid, a top bar with the
- * wordmark and the lock LED, and the scope along the bottom — all six
- * sections talking directly to the processor's APVTS. */
+/** The envelope follower's own small scope: ~2 s of history, the detected
+ * input level as a filled grey area and the envelope as a violet line, drained
+ * at ~30 fps from the processor's env-scope FIFO (already decimated to ~1 kHz
+ * there, so this just keeps the last 2000 points). */
+class EnvScope : public juce::Component
+{
+public:
+    void paint (juce::Graphics&) override;
+    void pull (FasalasProcessor&);
+    void setSourceLabel (const juce::String& s) { if (sourceLabel_ != s) { sourceLabel_ = s; repaint(); } }
+
+private:
+    static constexpr int historyLength = 2000;
+    std::array<float, historyLength> inputBuf_ {}, envBuf_ {};
+    int writeIndex_ = 0;
+    juce::String sourceLabel_ { "SIDE" };
+};
+
+/** The whole plugin panel: seven modules across two rows, a top bar with the
+ * wordmark and the lock LED, and the scope along the bottom — all sections
+ * talking directly to the processor's APVTS. */
 class Panel : public juce::Component
 {
 public:
@@ -153,6 +206,7 @@ public:
 
 private:
     static void layoutRow (juce::Rectangle<int> area, std::initializer_list<juce::Component*> items, int gap);
+    static void layoutCols (juce::Rectangle<int> area, std::initializer_list<std::pair<juce::Component*, float>> cols);
 
     FasalasProcessor& proc_;
     FasalasLookAndFeel lnf_;
@@ -166,6 +220,12 @@ private:
     Module inMod_ { "Input", hue::p4blue };
     Knob gainA_, gainB_, hyst_, divA_, divB_;
     Pills stereo_;
+
+    // Env follower
+    Module envMod_ { juce::String::fromUTF8 ("Env follower"), hue::env };
+    Pills envSource_;
+    Knob envSens_, envRise_, envHold_, envFall_;
+    EnvScope envScope_;
 
     // Comparator
     Module cmpMod_ { "Comparator", hue::p3rose };
@@ -183,7 +243,7 @@ private:
     Module loopMod_ { juce::String::fromUTF8 ("Loop \xC2\xB7 VCO"), hue::p1lilac };
     Latch loop_;
     juce::Label vcoReadout_;
-    Knob vcoOffset_;
+    Knob vcoOffset_, vcoSoften_;
     Pills vcoRange_, loopTrack_;
 
     // Filter

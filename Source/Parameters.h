@@ -15,6 +15,17 @@ extern const juce::String divA;
 extern const juce::String divB;
 extern const juce::String stereo;
 
+// Env follower
+extern const juce::String envSource;
+extern const juce::String envSens;
+extern const juce::String envRise;
+extern const juce::String envHold;
+extern const juce::String envFall;
+extern const juce::String envToCutoff;
+extern const juce::String envToDrive;
+extern const juce::String envToWindow;
+extern const juce::String envToOffset;
+
 // Comparator
 extern const juce::String mode;
 extern const juce::String window;
@@ -29,6 +40,7 @@ extern const juce::String shape;
 extern const juce::String loop;
 extern const juce::String vcoRange;
 extern const juce::String vcoOffset;
+extern const juce::String vcoSoften;
 extern const juce::String loopTrack;
 
 // Filter
